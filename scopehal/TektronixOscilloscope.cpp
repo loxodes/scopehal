@@ -466,6 +466,7 @@ bool TektronixOscilloscope::IsChannelEnabled(size_t i)
 	if(i == m_extTrigChannel->GetIndex())
 		return false;
 
+
 	//Pre-checks based on type
 	if(IsDigital(i))
 	{
@@ -492,21 +493,23 @@ bool TektronixOscilloscope::IsChannelEnabled(size_t i)
 		if(m_probeTypes[i - m_spectrumChannelBase] == PROBE_TYPE_DIGITAL_8BIT)
 			return false;
 	}
+	
 
+	//At least on MDO3K, channel status is always enabled in the cache
+	//How is the channel status cahce disabled if a channel is disabled at startup?
 	//Check the cache
+	if(m_family != FAMILY_MDO3K)
 	{
 		lock_guard<recursive_mutex> lock(m_cacheMutex);
 		if(m_channelsEnabled.find(i) != m_channelsEnabled.end())
 			return m_channelsEnabled[i];
 	}
-
 	lock_guard<recursive_mutex> lock2(m_mutex);
 
 	switch(m_family)
 	{
 		case FAMILY_MSO5:
 		case FAMILY_MSO6:
-
 			//Undocumented command to toggle spectrum view state
 			if(IsSpectrum(i))
 				m_transport->SendCommand(m_channels[i - m_spectrumChannelBase]->GetHwname() + ":SV:STATE?");
@@ -515,7 +518,7 @@ bool TektronixOscilloscope::IsChannelEnabled(size_t i)
 			break;
 
 		case FAMILY_MDO3K:
-			// FIXME, write this...
+			m_transport->SendCommand(string("SEL:") + m_channels[i]->GetHwname() + "?");
 			break;
 
 		default:
@@ -1000,7 +1003,14 @@ vector<unsigned int> TektronixOscilloscope::GetChannelBandwidthLimiters(size_t i
 			break;
 
 		case FAMILY_MDO3K:
-			// FIXME, implement this..
+
+			//Only show "unlimited" for 50 ohm channels
+			if(!is_1m)
+				ret.push_back(0);
+
+			ret.push_back(20);
+			ret.push_back(250);
+			ret.push_back(500);
 			break;
 
 		default:
@@ -1548,12 +1558,8 @@ bool TektronixOscilloscope::AcquireDataMDO34K(map<int, vector<WaveformBase*> >& 
 	for(size_t i=0; i<m_analogChannelCount; i++)
 	{
 		LogDebug("Acquiring channel %u\n", i);
-		//if(!IsChannelEnabled(i))
-		//	LogDebug("Channel %u is not enabled, continuing\n", i);
-		//	continue;
-		m_channelsEnabled[i] = true;
-
-		LogDebug("Channel %u is enabled, continuing to DAT:SOU\n", i);
+		if(!IsChannelEnabled(i))
+			continue;
 		// Set source & get preamble+data
 		m_transport->SendCommand(string("DAT:SOU ") + m_channels[i]->GetHwname());
 

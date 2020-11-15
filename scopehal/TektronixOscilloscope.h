@@ -169,7 +169,7 @@ protected:
 
 	//acquisition
 	bool AcquireDataMSO56(std::map<int, std::vector<WaveformBase*> >& pending_waveforms);
-	bool AcquireDataMDO34(std::map<int, std::vector<WaveformBase*> >& pending_waveforms);
+	bool AcquireDataMDO34K(std::map<int, std::vector<WaveformBase*> >& pending_waveforms);
 	void DetectProbes();
 
 	//Mutexing for thread safety
@@ -265,7 +265,7 @@ protected:
 	{
 		FAMILY_MSO5,
 		FAMILY_MSO6,
-		FAMILY_MDO3,
+		FAMILY_MDO3K,
 		FAMILY_UNKNOWN
 	} m_family;
 

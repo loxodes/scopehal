@@ -113,6 +113,8 @@ TektronixOscilloscope::TektronixOscilloscope(SCPITransport* transport)
 			m_transport->SendCommand("ACQ:STOPA SEQ");				//Stop after acquiring a single waveform
 			m_transport->SendCommand("CONFIG:ANALO:BANDW?");		//Figure out what bandwidth we have
 			m_maxBandwidth = stof(m_transport->ReadReply()) * 1e-6;	//(so we know what probe bandwidth is)
+			m_transport->SendCommand("CONFIG:DIGITA:NUMCHAN?");		//Figure out how many digital channels we have
+			m_digitalChannelCount = stoi(m_transport->ReadReply());	// 
 			break;
 
 		default:
@@ -211,7 +213,19 @@ TektronixOscilloscope::TektronixOscilloscope(SCPITransport* transport)
 				}
 			}
 			break;
-
+		case FAMILY_MDO3K:
+			for(size_t i=0; i<m_digitalChannelCount; i++)
+			{
+				m_channels.push_back(
+					new OscilloscopeChannel(
+					this,
+					string("D") + to_string(i),
+					OscilloscopeChannel::CHANNEL_TYPE_DIGITAL,
+					"#000000",
+					1,
+					m_channels.size(),
+					true));
+			}
 		default:
 			break;
 	}
@@ -413,9 +427,8 @@ void TektronixOscilloscope::DetectProbes()
 			break;
 
 		case FAMILY_MDO3K:
-			//FIXME: add support for digital probe,
 			//MDO3000 does not support :PROBETYPE?
-			//digital channels are on a sepparate logic pod
+			//Digital channels are on a separate logic pod and not connected to analog channels
 			for(size_t i=0; i<m_analogChannelCount; i++)
 			{
 
@@ -425,6 +438,11 @@ void TektronixOscilloscope::DetectProbes()
 					m_probeTypes[i] = PROBE_TYPE_ANALOG_250K;
 				else
 					m_probeTypes[i] = PROBE_TYPE_ANALOG;
+			}
+
+			for(size_t i=m_analogChannelCount; i<m_analogChannelCount + m_digitalChannelCount; i++)
+			{
+				m_probeTypes[i] = PROBE_TYPE_DIGITAL_1BIT;
 			}
 			break;
 
@@ -471,11 +489,27 @@ bool TektronixOscilloscope::IsChannelEnabled(size_t i)
 	if(IsDigital(i))
 	{
 		lock_guard<recursive_mutex> lock(m_cacheMutex);
+		switch(m_family)
+		{
+			case FAMILY_MSO5:
+			case FAMILY_MSO6:
+				{
+				//If the parent analog channel doesn't have a digital probe, we're disabled
+				size_t parent = m_flexChannelParents[m_channels[i]];
+				if(m_probeTypes[parent] != PROBE_TYPE_DIGITAL_8BIT)
+					return false;
+				}
+				break;
 
-		//If the parent analog channel doesn't have a digital probe, we're disabled
-		size_t parent = m_flexChannelParents[m_channels[i]];
-		if(m_probeTypes[parent] != PROBE_TYPE_DIGITAL_8BIT)
-			return false;
+
+			case FAMILY_MDO3K:
+				if(m_probeTypes[i] != PROBE_TYPE_DIGITAL_1BIT)
+					return false;
+				break;
+
+			default:
+				return false;
+		}
 	}
 	else if(IsAnalog(i))
 	{
@@ -496,7 +530,7 @@ bool TektronixOscilloscope::IsChannelEnabled(size_t i)
 	
 
 	//At least on MDO3K, channel status is always enabled in the cache
-	//How is the channel status cahce disabled if a channel is disabled at startup?
+	//How is the channel status cache disabled if a channel is disabled at startup?
 	//Check the cache
 	if(m_family != FAMILY_MDO3K)
 	{
@@ -554,7 +588,6 @@ void TektronixOscilloscope::EnableChannel(size_t i)
 		//If we're a digital channel with an analog probe connected, we're unusable
 		switch(m_family)
 		{
-			case FAMILY_MDO3K:
 			case FAMILY_MSO5:
 			case FAMILY_MSO6:
 				if(IsDigital(i))
@@ -565,7 +598,6 @@ void TektronixOscilloscope::EnableChannel(size_t i)
 						return;
 				}
 				break;
-
 			default:
 				break;
 		}
@@ -594,7 +626,7 @@ void TektronixOscilloscope::EnableChannel(size_t i)
 				break;
 
 			case FAMILY_MDO3K:
-				// TODO: implement for MDO3000 series
+				m_transport->SendCommand(string("SEL:") + m_channels[i]->GetHwname() + "?");
 				break;
 
 			default:
@@ -620,15 +652,21 @@ bool TektronixOscilloscope::CanEnableChannel(size_t i)
 		if(m_probeTypes[i - m_spectrumChannelBase] == PROBE_TYPE_DIGITAL_8BIT)
 			return false;
 	}
-
-	//If the parent analog channel doesn't have a digital probe, we're unusable
-	if(IsDigital(i))
-	{
-		size_t parent = m_flexChannelParents[m_channels[i]];
-		if(m_probeTypes[parent] != PROBE_TYPE_DIGITAL_8BIT)
-			return false;
-	}
-
+	switch(m_family)
+		{
+			case FAMILY_MSO5:
+			case FAMILY_MSO6:
+				//If the parent analog channel doesn't have a digital probe, we're unusable
+				if(IsDigital(i))
+				{
+					size_t parent = m_flexChannelParents[m_channels[i]];
+					if(m_probeTypes[parent] != PROBE_TYPE_DIGITAL_8BIT)
+						return false;
+				}
+				break;
+			default:
+				break;
+		}
 	return true;
 }
 
@@ -654,7 +692,8 @@ void TektronixOscilloscope::DisableChannel(size_t i)
 				else
 					m_transport->SendCommand(string("DISP:WAVEV:") + m_channels[i]->GetHwname() + ":STATE OFF");
 				break;
-
+			case FAMILY_MDO3K:
+				m_transport->SendCommand(string("SEL:") + m_channels[i]->GetHwname() + " OFF");
 			default:
 				break;
 		}

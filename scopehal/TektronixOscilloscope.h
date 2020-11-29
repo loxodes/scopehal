@@ -177,12 +177,14 @@ protected:
 
 	//hardware analog channel count, independent of LA option etc
 	unsigned int m_analogChannelCount;
+	unsigned int m_digitalChannelCount;
 
 	enum ProbeType
 	{
 		PROBE_TYPE_ANALOG,
 		PROBE_TYPE_ANALOG_250K,
-		PROBE_TYPE_DIGITAL_8BIT
+		PROBE_TYPE_DIGITAL_8BIT,
+		PROBE_TYPE_DIGITAL_1BIT
 	};
 
 	//config cache

@@ -1130,7 +1130,10 @@ double TektronixOscilloscope::GetChannelVoltageRange(size_t i)
 				break;
 
 			case FAMILY_MDO3K:
-				m_transport->SendCommand(m_channels[i]->GetHwname() + ":SCA?");
+				if(IsAnalog(i))
+					m_transport->SendCommand(m_channels[i]->GetHwname() + ":SCA?");
+				else
+					return 1;
 				break;
 
 			default:
@@ -1344,8 +1347,13 @@ double TektronixOscilloscope::GetChannelOffset(size_t i)
 				break;
 
 			case FAMILY_MDO3K:
-				m_transport->SendCommand(m_channels[i]->GetHwname() + ":OFFS?");
-				offset = -stof(m_transport->ReadReply());
+				if(IsAnalog(i)) {
+					m_transport->SendCommand(m_channels[i]->GetHwname() + ":OFFS?");
+					offset = -stof(m_transport->ReadReply());
+				} else {
+					// TODO: FIX FOR DIGITAL CHANNELS
+					offset = 0;
+				}
 				break;
 
 			default:
@@ -1669,8 +1677,86 @@ bool TektronixOscilloscope::AcquireDataMDO34K(map<int, vector<WaveformBase*> >& 
 		m_transport->ReadReply();
 	}
 
-	// Add sampling digital channels....
+	//Get the digital stuff
+	m_transport->SendCommand("DAT:WID 1");					//8 data bits per channel
+	m_transport->SendCommand("DAT:ENC SRI");				//signed, little endian binary
+	for(size_t i=m_digitalChannelBase; i<m_channels.size(); i++)
+	{
+		//Skip anything without a digital probe connected
+		if(m_probeTypes[i] != PROBE_TYPE_DIGITAL_1BIT)
+		{
+			pending_waveforms[i].push_back(NULL);
+			continue;
+		}
 
+		//Only grab waveform if at least one channel is enabled
+		bool enabled = false;
+
+		if(IsChannelEnabled(i))
+		{
+			enabled = true;
+		}
+		if(!enabled)
+			continue;
+
+		//TODO: Use more DAT:SOUR DIG to gather multiple channels at once.. 
+		m_transport->SendCommand(string("DAT:SOU ") + m_channels[i]->GetHwname());
+
+		//Ask for the waveform preamble
+		m_transport->SendCommand("WFMO?");
+
+		//Process it
+		string preamble = m_transport->ReadReply(false);
+		sscanf(preamble.c_str(),
+			"%d;%d;%31[^;];%31[^;];%31[^;];%255[^;];%d;%c;%31[^;];"
+			"%31[^;];%lf;%lf;%d;%31[^;];%lf;%lf;%lf",
+			&byte_num, &bit_num, encoding, bin_format, byte_order, wfid, &nr_pt, pt_fmt, pt_order,
+			xunit, &xincrement, &xzero,	&pt_off, yunit, &ymult, &yoff, &yzero);
+		timebase = xincrement * 1e12;	//scope gives sec, not ps
+
+		m_transport->SendCommand("CURV?");
+
+		//Read length of the actual data
+		char tmplen[3] = {0};
+		m_transport->ReadRawData(2, (unsigned char*)tmplen);	//expect #n
+		int ndigits = atoi(tmplen+1);
+
+		char digits[10] = {0};
+		m_transport->ReadRawData(ndigits, (unsigned char*)digits);
+		int msglen = atoi(digits);
+
+		//Read the actual data
+		char* rxbuf = new char[msglen];
+		m_transport->ReadRawData(msglen, (unsigned char*)rxbuf);
+
+		//Process the data for  channel
+		//Set up the capture we're going to store our data into
+		//(no TDC data or fine timestamping available on Tektronix scopes?)
+		DigitalWaveform* cap = new DigitalWaveform;
+		cap->m_timescale = timebase;
+		cap->m_triggerPhase = 0;
+		cap->m_startTimestamp = time(NULL);
+		double t = GetTime();
+		cap->m_startPicoseconds = (t - floor(t)) * 1e12f;
+		cap->Resize(msglen);
+
+		//Extract sample data
+		for(int k=0; k<msglen; k++)
+		{
+			cap->m_offsets[k] = k;
+			cap->m_durations[k] = 1;
+			cap->m_samples[k] = (rxbuf[k]) ? true : false;
+		}
+
+		//Done, update the data
+		pending_waveforms[i].push_back(cap);
+
+		//Done
+		delete[] rxbuf;
+
+		//Throw out garbage at the end of the message (why is this needed?)
+		m_transport->ReadReply();
+	}
 	return true;
 }
 
